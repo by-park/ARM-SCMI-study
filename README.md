@@ -22,6 +22,10 @@ SCMI Agent 들이 그림 하단의 SCP Firmware 에 SCMI 프로토콜을 통해 
 
 출처: [SCMI 공식 문서](https://developer.arm.com/documentation/den0056/d/?lang=en)
 
+![SCMI overview diagram](https://community.arm.com/resized-image/__size/1040x0/__key/communityserver-blogs-components-weblogfiles/00-00-00-21-42/SCMI_5F00_Overview_5F00_Diagrams_5F00_Souvik_5F00_1_5F00_ST4.png)
+
+출처: [ARM Community Blog](https://community.arm.com/arm-community-blogs/b/architectures-and-processors-blog/posts/improved-power-management-system-control-through-scmi)
+
 
 
 ### 2. SCP Firmware Overview
@@ -30,7 +34,7 @@ module/ framework/ architecture
 
 
 
-SCP Firmware Initialization
+#### SCP Firmware Initialization
 
 코드 컴파일시 exceptions 가 가장 앞부분에 위치
 
@@ -189,7 +193,102 @@ WFI 와 WFE 의 차이: WFI 는 인터럽트가 발생하면 인터럽트 처리
 
 
 
+#### shared memory
+
+arch/arm64/boot/dts/arm/juno-base.dtsi (linux-6.1-rc5)
+
+```c
+        sram: sram@2e000000 {
+                compatible = "arm,juno-sram-ns", "mmio-sram";
+                reg = <0x0 0x2e000000 0x0 0x8000>;
+
+                #address-cells = <1>;
+                #size-cells = <1>;
+                ranges = <0 0x0 0x2e000000 0x8000>;
+
+                cpu_scp_lpri: scp-sram@0 {
+                        compatible = "arm,juno-scp-shmem";
+                        reg = <0x0 0x200>;
+                };
+
+                cpu_scp_hpri: scp-sram@200 {
+                        compatible = "arm,juno-scp-shmem";
+                        reg = <0x200 0x200>;
+                };
+        };
+```
+
+arch/arm64/boot/dts/arm/juno-scmi.dtsi (linux-6.1-rc5)
+
+```c
+        firmware {
+                scmi {
+                        compatible = "arm,scmi";
+                        mbox-names = "tx", "rx";
+                        mboxes = <&mailbox 0 0 &mailbox 0 1>;
+                        shmem = <&cpu_scp_lpri0 &cpu_scp_lpri1>;
+                        #address-cells = <1>;
+                        #size-cells = <0>;
+
+                        scmi_devpd: protocol@11 {
+                                reg = <0x11>;
+                                #power-domain-cells = <1>;
+                        };
+
+                        scmi_dvfs: protocol@13 {
+                                reg = <0x13>;
+                                #clock-cells = <1>;
+                                mbox-names = "tx", "rx";
+                                mboxes = <&mailbox 1 0 &mailbox 1 1>;
+                                shmem = <&cpu_scp_hpri0 &cpu_scp_hpri1>;
+                        };
+
+                        scmi_clk: protocol@14 {
+                                reg = <0x14>;
+                                #clock-cells = <1>;
+                        };
+
+                        scmi_sensors0: protocol@15 {
+                                reg = <0x15>;
+                                #thermal-sensor-cells = <1>;
+                        };
+                };
+        };
+```
+
+
+
+
+
 ### 3. ARM JUNO Board
+
+Juno r2 ARM Development Platform SoC Technical Reference Manual
+
+https://developer.arm.com/documentation/ddi0515/f/
+
+ADP (ARM Development Platform) 는 Linux 나 Android 와 같이 Linaro 기반 커널들에 대한 개발 및 테스트가 가능하도록 만들어진 플랫폼이다.
+
+> The ADP SoC is a development chip that is implemented on the TSMC 28HPM process and delivers the following: 
+>
+> • A platform for ARMv8-A software and tool development to enable robust testing of software deliverables on Linaro-based kernels such as Linux and Android.
+
+![Juno_r2_block_diagram](Juno_r2_block_diagram.PNG)
+
+ADP 의 내부 중 SCP 가 사용하는 메모리 영역은 아래와 같다.
+
+> A Cortex-M3-based SCP designed to function as a trusted subsystem. This subsystem also includes: 
+>
+> — A local trusted on-chip ROM. 
+>
+> — Support for a local trusted on-chip SRAM to execute the main SCP firmware.
+
+Trusted RAM 은 256 KB, Trusted ROM 은 64 KB
+
+![Juno_Memory_map1](Juno_r2_memory_map1.PNG)
+
+Non-trusted SRAM 은 32KB, Non-trusted ROM 은 4KB
+
+![Juno_Memory_map2](Juno_r2_memory_map2.PNG))
 
 
 
