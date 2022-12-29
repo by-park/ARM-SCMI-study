@@ -370,7 +370,7 @@ $ ccmake -B tmp/build -DSCP_FIRMWARE_SOURCE_DIR:PATH=juno/scp_ramfw
 $ make -f Makefile.cmake PRODUCT=juno TOOLCHAIN=ArmClang
 ```
 
-
+참고: SCP-firmware-2.11/doc/cmake_readme.md
 
 
 
@@ -383,6 +383,8 @@ $ make -f Makefile.cmake PRODUCT=juno TOOLCHAIN=ArmClang
 [3] [SCP Firmware 101 ppt](https://static.linaro.org/connect/san19/presentations/san19-117.pdf) 또는 [대본](http://docplayer.net/167756101-Arm-system-control-processor-scp-firmware-101.html)
 
 [4] [SCP Firmware 101 설명 영상](https://resources.linaro.org/en/resource/PZgSfTGcN3qrz86cbitkMn) 또는 [유튜브 영상](https://www.youtube.com/watch?v=hR5YwfoyVy4)
+
+[5] [Juno ARM Development Platform 공식 문서](https://developer.arm.com/documentation/ddi0515/f/)
 
 
 
