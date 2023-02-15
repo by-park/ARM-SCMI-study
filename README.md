@@ -28,6 +28,18 @@ SCMI Agent 들이 그림 하단의 SCP Firmware 에 SCMI 프로토콜을 통해 
 
 
 
+### ARM PCSA
+
+> ARM에서 권장하는 방법은 마이크로컨트롤러와 일부 주변 로직을 사용하여 독립 장치인 시스템 제어 프로세서(시스템 제어 프로세서, 이하 SCP라고 함)를 만드는 것입니다. ARM 계열이므로 이 마이크로컨트롤러는 M 또는 R 시리즈입니다. SoC의 전력 소모량 관리는 SCP에서 완료됩니다(물론 SCP는 이 작업만 완료하는 것은 아닙니다).
+
+![scp](https://aijishu.com/img/bV2rF)
+
+![2.png](https://aijishu.com/img/bV2rH)
+
+https://aijishu.com/a/1060000000208655
+
+
+
 ### 2. SCP Firmware Overview
 
 module/ framework/ architecture
@@ -258,6 +270,224 @@ arch/arm64/boot/dts/arm/juno-scmi.dtsi (linux-6.1-rc5)
 
 
 
+### MHU (Message Handling Unit)
+
+ARM Juno 보드의 MHU 기준의 코드
+
+Juno 보드 Manual 3.6 절의 MHU Registers 를 보면 SCP_INTR~ (SCP -> AP 방향)과  CPU_INTR~ (AP -> SCP 방향)이 있다.
+
+각 내부는 L, H, S 로 나뉘는데, L은 Low priority Non-secure interrupt 이고, H 는 High priority Non-secure interrupt, S 는 Secure interrupt 이다.
+
+Juno 의 mhu module 의 element 로 3개가 다 등록된 것을 볼 수 있다.
+
+product/juno/scp_ramfw/config_mhu.c
+
+```c
+static const struct fwk_element element_table[] = {
+    [JUNO_MHU_DEVICE_IDX_S] = {
+        .name = "",
+        .sub_element_count = 1,
+        .data = &(struct mod_mhu_device_config) {
+            .irq = (unsigned int) MHU_SECURE_IRQ,
+            .in = MHU_CPU_INTR_S_BASE,
+            .out = MHU_SCP_INTR_S_BASE,
+        },
+    },
+    [JUNO_MHU_DEVICE_IDX_NS_H] = {
+        .name = "",
+        .sub_element_count = 2,
+        .data = &(struct mod_mhu_device_config) {
+            .irq = (unsigned int) MHU_HIGH_PRIO_IRQ,
+            .in = MHU_CPU_INTR_H_BASE,
+            .out = MHU_SCP_INTR_H_BASE,
+        },
+    },
+    [JUNO_MHU_DEVICE_IDX_NS_L] = {
+        .name = "",
+        .sub_element_count = 1,
+        .data = &(struct mod_mhu_device_config) {
+            .irq = (unsigned int) MHU_LOW_PRIO_IRQ,
+            .in = MHU_CPU_INTR_L_BASE,
+            .out = MHU_SCP_INTR_L_BASE,
+        },
+    },
+    [JUNO_MHU_DEVICE_IDX_COUNT] = { 0 },
+};
+
+```
+
+mhu_isr 에서 들어온 인터럽트를 처리한다. 각 인터럽트의 in 을 (바로 위에 정의된 메모리 주소 영역) 접근해서 전달받은 메시지를 열어본다.
+
+module/mhu/src/mod_mhu.c
+
+```c
+static void mhu_isr(void)
+{
+    int status;
+    unsigned int interrupt;
+    unsigned int device_idx;
+    struct mhu_device_ctx *device_ctx;
+    struct mhu_reg *reg;
+    unsigned int slot;
+    struct mhu_smt_channel *smt_channel;
+
+    status = fwk_interrupt_get_current(&interrupt);
+    if (status != FWK_SUCCESS) {
+        return;
+    }
+
+    for (device_idx = 0; device_idx < mhu_ctx.device_count; device_idx++) {
+        device_ctx = &mhu_ctx.device_ctx_table[device_idx];
+        if (device_ctx->config->irq == interrupt) {
+            break;
+        }
+    }
+
+    if (device_idx >= mhu_ctx.device_count) {
+        return;
+    }
+
+    reg = (struct mhu_reg *)device_ctx->config->in;
+
+    /* Loop over all the slots */
+    while (reg->STAT != 0) {
+        slot = (unsigned int)__builtin_ctz(reg->STAT);
+
+```
+
+각각의 주소는 kernel 의 dt 에도 정의된 것을 볼 수 있다. (L, H, S 별 주소)
+
+대부분은 non-secure 이며 low priority 이며, dvfs 만 non-secure 에 high priority 로 되어있다.
+
+arch/arm64/boot/dts/arm/juno-scmi.dtsi
+
+```c
+        firmware {
+                scmi {
+                        compatible = "arm,scmi";
+                        mbox-names = "tx", "rx";
+                        mboxes = <&mailbox 0 0 &mailbox 0 1>;
+                        shmem = <&cpu_scp_lpri0 &cpu_scp_lpri1>;
+                        #address-cells = <1>;
+                        #size-cells = <0>;
+
+                        scmi_devpd: protocol@11 {
+                                reg = <0x11>;
+                                #power-domain-cells = <1>;
+                        };
+
+                        scmi_dvfs: protocol@13 {
+                                reg = <0x13>;
+                                #clock-cells = <1>;
+                                mbox-names = "tx", "rx";
+                                mboxes = <&mailbox 1 0 &mailbox 1 1>;
+                                shmem = <&cpu_scp_hpri0 &cpu_scp_hpri1>;
+                        };
+
+                        scmi_clk: protocol@14 {
+                                reg = <0x14>;
+                                #clock-cells = <1>;
+                        };
+
+                        scmi_sensors0: protocol@15 {
+                                reg = <0x15>;
+                                #thermal-sensor-cells = <1>;
+                        };
+                };
+        };
+```
+
+mhu 에서 smt api 를 호출하게 되는데, smt api 도 위의 3 종류 인터럽트가 다 정의되어있다.
+
+product/juno/scp_ramfw/config_smt.c
+
+```c
+static const struct fwk_element element_table[] = {
+    /* JUNO_SCMI_SERVICE_IDX_PSCI_A2P */
+    { .name = "",
+      .data =
+          &(struct mod_smt_channel_config){
+              .type = MOD_SMT_CHANNEL_TYPE_COMPLETER,
+              .policies = (MOD_SMT_POLICY_INIT_MAILBOX | MOD_SMT_POLICY_SECURE),
+              .mailbox_address = (uintptr_t)SCMI_PAYLOAD_S_A2P_BASE,
+              .mailbox_size = SCMI_PAYLOAD_SIZE,
+              .driver_id = FWK_ID_SUB_ELEMENT_INIT(
+                  FWK_MODULE_IDX_MHU,
+                  JUNO_MHU_DEVICE_IDX_S,
+                  0),
+              .driver_api_id = FWK_ID_API_INIT(FWK_MODULE_IDX_MHU, 0),
+              .pd_source_id = FWK_ID_ELEMENT_INIT(
+                  FWK_MODULE_IDX_POWER_DOMAIN,
+                  POWER_DOMAIN_IDX_SYSTOP),
+          } },
+    /* JUNO_SCMI_SERVICE_IDX_OSPM_A2P_0 */
+    { .name = "",
+      .data =
+          &(struct mod_smt_channel_config){
+              .type = MOD_SMT_CHANNEL_TYPE_COMPLETER,
+              .policies = MOD_SMT_POLICY_INIT_MAILBOX,
+              .mailbox_address = (uintptr_t)SCMI_PAYLOAD_LOW_A2P_BASE,
+              .mailbox_size = SCMI_PAYLOAD_SIZE,
+              .driver_id = FWK_ID_SUB_ELEMENT_INIT(
+                  FWK_MODULE_IDX_MHU,
+                  JUNO_MHU_DEVICE_IDX_NS_L,
+                  0),
+              .driver_api_id = FWK_ID_API_INIT(FWK_MODULE_IDX_MHU, 0),
+              .pd_source_id = FWK_ID_ELEMENT_INIT(
+                  FWK_MODULE_IDX_POWER_DOMAIN,
+                  POWER_DOMAIN_IDX_SYSTOP),
+          } },
+    /* JUNO_SCMI_SERVICE_IDX_OSPM_A2P_1 */
+    { .name = "",
+      .data =
+          &(struct mod_smt_channel_config){
+              .type = MOD_SMT_CHANNEL_TYPE_COMPLETER,
+              .policies = MOD_SMT_POLICY_INIT_MAILBOX,
+              .mailbox_address = (uintptr_t)SCMI_PAYLOAD_HIGH_A2P_BASE,
+              .mailbox_size = SCMI_PAYLOAD_SIZE,
+              .driver_id = FWK_ID_SUB_ELEMENT_INIT(
+                  FWK_MODULE_IDX_MHU,
+                  JUNO_MHU_DEVICE_IDX_NS_H,
+                  0),
+              .driver_api_id = FWK_ID_API_INIT(FWK_MODULE_IDX_MHU, 0),
+              .pd_source_id = FWK_ID_ELEMENT_INIT(
+                  FWK_MODULE_IDX_POWER_DOMAIN,
+                  POWER_DOMAIN_IDX_SYSTOP),
+          } },
+#ifdef BUILD_HAS_SCMI_NOTIFICATIONS
+    /* JUNO_SCMI_SERVICE_IDX_OSPM_P2A */
+    { .name = "",
+      .data =
+          &(struct mod_smt_channel_config){
+              .type = MOD_SMT_CHANNEL_TYPE_REQUESTER,
+              .policies = MOD_SMT_POLICY_INIT_MAILBOX,
+              .mailbox_address = (uintptr_t)SCMI_PAYLOAD_HIGH_P2A_BASE,
+              .mailbox_size = SCMI_PAYLOAD_SIZE,
+              .driver_id = FWK_ID_SUB_ELEMENT_INIT(
+                  FWK_MODULE_IDX_MHU,
+                  JUNO_MHU_DEVICE_IDX_NS_H,
+                  1),
+              .driver_api_id = FWK_ID_API_INIT(FWK_MODULE_IDX_MHU, 0),
+              .pd_source_id = FWK_ID_ELEMENT_INIT(
+                  FWK_MODULE_IDX_POWER_DOMAIN,
+                  POWER_DOMAIN_IDX_SYSTOP),
+          } },
+#endif
+    [JUNO_SCMI_SERVICE_IDX_COUNT] = { 0 },
+};
+
+```
+
+
+
+순서
+
+(1) AP (Linux Kernel) 에서 signal_message로 SCP_INTR_L_SET 에 1로 세팅하면 인터럽트가 전달됨
+
+(2) SCP 에서 mhu_isr 핸들러가 호출되면 SCP_INTR_L_STAT 의 1 여부를 확인하고 queue 에 저장함. SCP_INTR_L_CLEAR 를 이용해서 처리가 완료되면 0으로 clear 시켜줌
+
+(3) AP 의 last_tx_done 에서 SCP_INTR_L_STAT 의 0 여부를 확인해서 clear 되어있지 않으면 hr_timer 이용해서 1초 후에 다시 체크함 => 이 로직은 시간 단축을 위해서 polling 적용을 검토해볼 수 있을 것
+
 
 
 ### 3. ARM JUNO Board
@@ -291,6 +521,12 @@ Non-trusted SRAM 은 32KB, Non-trusted ROM 은 4KB
 ![Juno_Memory_map2](Juno_r2_memory_map2.PNG))
 
 
+
+### ARM Neoverse N2
+
+![RD-N2 software components and features](blob:https://developer.arm.com/5f038d69-3069-4ed0-b697-42a923f82616)
+
+RD-N2 의 구조는 위와 같다.
 
 ### 4. OP TEE
 
@@ -371,6 +607,14 @@ $ make -f Makefile.cmake PRODUCT=juno TOOLCHAIN=ArmClang
 ```
 
 참고: SCP-firmware-2.11/doc/cmake_readme.md
+
+
+
+개선 방향
+
+1. 우선순위는 어떻게 할지: 동일한 우선 순위로 put_event 되고 queue 에서 꺼내 처리되는지?
+2. Latency 가 병목이 생기는 건 어떻게 할지. Host CPU 는 빠르고, SCP Firmware 용 Cortex M 은 느리다면? (max frequency 스펙이 어떻게 되지?)
+3. 멀티 태스킹 지원
 
 
 
