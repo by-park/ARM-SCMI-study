@@ -524,7 +524,17 @@ Non-trusted SRAM 은 32KB, Non-trusted ROM 은 4KB
 
 ### ARM Neoverse N2
 
-![RD-N2 software components and features](blob:https://developer.arm.com/5f038d69-3069-4ed0-b697-42a923f82616)
+![RD-N2 software components and features](RD_N2_software_components_and_features.png)
+
+https://developer.arm.com/documentation/102337/0000/Software-stack/About-the-software
+
+![Distributed power management in RD-N2](RD_N2_distributed_power_management.png)
+
+https://developer.arm.com/documentation/102337/0000/Functional-description/System-power-management-and-domains
+
+![img](https://www.electropages.com/storage/app/media/uploaded-files/1620376224124.jpeg)
+
+https://www.electropages.com/blog/2021/05/arm-announces-n2-neoverse-computing-cores-data-centres
 
 RD-N2 의 구조는 위와 같다.
 
